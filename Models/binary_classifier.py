@@ -300,10 +300,32 @@ class Layer_Dropout:
     def backward(self, dvalues):
         self.dinputs = dvalues * self.binary_mask
 
+class Loss_BinaryCrossentropy(Loss):
+    def forward(self, y_pred, y_true):
+        y_pred_clipped = np.clip(y_pred,1e-7,1-1e-7)
+        sample_losses = -(y_true * np.log(y_pred_clipped) + (1-y_true) * np.log(1-y_pred_clipped))
+        sample_losses  = np.mean(sample_losses, axis = -1)
+        return sample_losses
+    def backward(self, dvalues, y_true):
+        samples = len(dvalues)
+        outputs = len(dvalues[0])
+        clipped_dvalues = np.clip(dvalues, 1e-7, 1-1e-7)
+        self.dinputs = -(y_true/clipped_dvalues - (1-y_true) / (1-clipped_dvalues))/ outputs
+        self.dinputs = self.dinputs/samples
+
+class Activation_Sigmoid:
+    def forward(self, inputs):
+        self.inputs = inputs
+        self.output = 1/(1+np.exp(-inputs))
+
+    def backward(self,dvalues):
+        self.dinput = dvalues * (1-self.output) * self.output
 
 # Create datasets
-X, y = spiral_data(samples=100, classes=3)
-X_test, y_test = spiral_data(samples=100, classes=3)
+X, y = spiral_data(samples=100, classes=2)
+y= y.reshape(-1,1)
+X_test, y_test = spiral_data(samples=100, classes=2)
+y_test= y_test.reshape(-1,1)
 
 # Create Dense layer with 2 input features and 512 output values
 dense1 = Layer_Dense(2, 512, weight_regularizer_L2=5e-4, bias_regularizer_L2=5e-4)
@@ -311,16 +333,14 @@ dense1 = Layer_Dense(2, 512, weight_regularizer_L2=5e-4, bias_regularizer_L2=5e-
 # Create ReLU activation
 activation1 = Activation_ReLU()
 
-# Create dropout layer (drops 10% of neurons)
-dropout1 = Layer_Dropout(0.1)
+dense2 = Layer_Dense(512, 1)
 
-# Second Dense layer: 512 inputs (matches dense1 outputs), 3 outputs
-dense2 = Layer_Dense(512, 3)
+activation2 = Activation_Sigmoid()
 
 # Combined Softmax activation and loss
-loss_activation = Activation_Softmax_Loss_CategoricalCrossentropy()
+loss_activation = Loss_BinaryCrossentropy()
 
-optimizer = Optimizer_Adam(learning_rate=0.05, decay=1e-5)
+optimizer = Optimizer_Adam(decay=1e-5)
 
 
 # Train
@@ -329,8 +349,8 @@ for epoch in range(1001):
     # Forward pass
     dense1.forward(X)
     activation1.forward(dense1.output)
-    dropout1.forward(activation1.output)
-    dense2.forward(dropout1.output)
+    dense2.forward(activation1.output)
+    activation2.forward(dense2.output)
 
     # Calculate loss
     data_loss = loss_activation.forward(dense2.output, y)
@@ -339,9 +359,7 @@ for epoch in range(1001):
     loss = data_loss + regularization_loss
 
     # Calculate accuracy
-    predictions = np.argmax(loss_activation.output, axis=1)
-    if len(y.shape) == 2:
-        y = np.argmax(y, axis=1)
+    predictions = np.argmax(activation2.output > 0.5)* 1
     accuracy = np.mean(predictions == y)
 
     if not epoch % 100:
@@ -352,9 +370,9 @@ for epoch in range(1001):
 
     # Backward pass
     loss_activation.backward(loss_activation.output, y)
-    dense2.backward(loss_activation.dinputs)
-    dropout1.backward(dense2.dinputs)
-    activation1.backward(dropout1.dinputs)
+    activation2.backward(dense2.dinputs)
+    dense2.backward(activation2.dinputs)
+    activation1.backward(dense2.dinputs)
     dense1.backward(activation1.dinputs)
 
     # Update parameters
@@ -368,9 +386,7 @@ for epoch in range(1001):
 dense1.forward(X_test)
 activation1.forward(dense1.output)
 dense2.forward(activation1.output)
-loss = loss_activation.forward(dense2.output, y_test)
-predictions = np.argmax(loss_activation.output, axis=1)
-if len(y_test.shape) == 2:
-    y_test = np.argmax(y_test, axis=1)
+loss = loss_activation.calculate(dense2.output, y_test)
+predictions = (activation2.output > 0.5) *1
 accuracy = np.mean(predictions == y_test)
 print(f'validation, acc: {accuracy:.3f}, loss: {loss:.3f}')
