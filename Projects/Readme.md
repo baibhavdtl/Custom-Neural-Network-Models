@@ -1,0 +1,1 @@
+# Effect of optimizers and regularization on fitting a noisy sinusoid with a from-scratch neural network
